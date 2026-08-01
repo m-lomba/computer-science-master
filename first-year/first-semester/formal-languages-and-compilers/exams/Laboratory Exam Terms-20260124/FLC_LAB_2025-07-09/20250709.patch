@@ -1,0 +1,106 @@
+diff --git a/acse/parser.h b/acse/parser.h
+--- a/acse/parser.h
++++ b/acse/parser.h
+@@ -26,6 +26,12 @@ typedef struct {
+   t_label *lExit; ///< Label to the first instruction after the loop.
+ } t_whileStmt;
+ 
++typedef struct {
++  t_label *lLoop;
++  t_label *lExit;
++  t_regID rCounter;
++} t_countWhileStmt;
++
+ /**
+  * @}
+  */
+diff --git a/acse/parser.y b/acse/parser.y
+--- a/acse/parser.y
++++ b/acse/parser.y
+@@ -50,6 +50,7 @@ void yyerror(const char *msg)
+   t_label *label;
+   t_ifStmt ifStmt;
+   t_whileStmt whileStmt;
++  t_countWhileStmt countWhileStmt;
+ }
+ 
+ /*
+@@ -77,6 +78,7 @@ void yyerror(const char *msg)
+ %token <label> DO
+ %token <string> IDENTIFIER
+ %token <integer> NUMBER
++%token <countWhileStmt> COUNT_WHILE
+ 
+ /*
+  * Non-terminal symbol semantic value type declarations
+@@ -182,9 +184,46 @@ statement
+   | return_statement SEMI
+   | read_statement SEMI
+   | write_statement SEMI
++  | count_while_statement
+   | SEMI
+ ;
+ 
++count_while_statement
++  : var_id ASSIGN COUNT_WHILE
++  {
++    // Check the type of the result variable. Note that even if we didn't do
++    // this, in the call to genStoreRegisterToVariable() the compiler would
++    // fail in a similar way, so we could omit this check with no consequences.
++    if (isArray($1)) {
++      yyerror("the destination of count_while must be a scalar");
++      YYERROR;
++    }
++    // Reserve a register initialized to zero which will count the iterations.
++    $3.rCounter = getNewRegister(program);
++    genLI(program, $3.rCounter, 0);
++    // Assign a label at the beginning of the loop for the back-edge.
++    $3.lLoop = createLabel(program);
++    assignLabel(program, $3.lLoop);
++  }
++  LPAR exp RPAR
++  {
++    // Generate a jump out of the loop if the condition is equal to zero.
++    $3.lExit = createLabel(program);
++    genBEQ(program, $6, REG_0, $3.lExit);
++  }
++  code_block
++  {
++    // Generate an increment of the counter register by 1.
++    genADDI(program, $3.rCounter, $3.rCounter, 1);
++    // Generate a jump back to the beginning of the loop after its body.
++    genJ(program, $3.lLoop);
++    // Assign the label to the end of the loop.
++    assignLabel(program, $3.lExit);
++    // Generate the assignment of the counter register to the variable.
++    genStoreRegisterToVariable(program, $1, $3.rCounter);
++  }
++;
++
+ /* An assignment statement stores the value of an expression in the memory
+  * location of a given scalar variable or array element. */
+ assign_statement
+diff --git a/acse/scanner.l b/acse/scanner.l
+--- a/acse/scanner.l
++++ b/acse/scanner.l
+@@ -81,6 +81,7 @@ ID                        [a-zA-Z_][a-zA-Z0-9_]*
+ "return"                  { return RETURN; }
+ "read"                    { return READ; }
+ "write"                   { return WRITE; }
++"count_while"             { return COUNT_WHILE; }
+ 
+ {ID}                      {
+                             yylval.string = strdup(yytext);
+diff --git a/tests/count_while/count_while.src b/tests/count_while/count_while.src
+--- /dev/null
++++ b/tests/count_while/count_while.src
+@@ -0,0 +1,9 @@
++int i, n;
++
++i = 256;
++n = 777;
++n = count_while (i != 1) {
++  i = i / 2;
++  write(n);
++}
++write(n); // prints 8

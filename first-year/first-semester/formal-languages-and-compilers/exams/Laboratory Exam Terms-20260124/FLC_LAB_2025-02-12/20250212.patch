@@ -1,0 +1,169 @@
+diff --git a/acse/parser.y b/acse/parser.y
+index 4039075..7eb0f61 100644
+--- a/acse/parser.y
++++ b/acse/parser.y
+@@ -19,6 +19,18 @@
+ // The program currently being compiled.
+ static t_program *program;
+ 
++// Symbol object for the induction variable of the current forall loop.
++// If we are not currently parsing a forall loop this variable is NULL.
++t_symbol *vForallIndVar;
++// Label object for jumping to the next iteration of the forall loop.
++t_label *lForallNext;
++// Label object for jumping to the end of the current iteration of the forall
++// loop.
++t_label *lForallContinue;
++// Label object for jumping to the first instruction after the current forall
++// loop.
++t_label *lForallExit;
++
+ void yyerror(const char *msg)
+ {
+   emitError(curFileLoc, "%s", msg);
+@@ -70,6 +82,7 @@ void yyerror(const char *msg)
+ %token TYPE
+ %token RETURN
+ %token READ WRITE ELSE
++%token FORALL FROM TO
+ 
+ // These are the tokens with a semantic value.
+ %token <ifStmt> IF
+@@ -77,6 +90,7 @@ void yyerror(const char *msg)
+ %token <label> DO
+ %token <string> IDENTIFIER
+ %token <integer> NUMBER
++%token <label> WHEN
+ 
+ /*
+  * Non-terminal symbol semantic value type declarations
+@@ -182,9 +196,91 @@ statement
+   | return_statement SEMI
+   | read_statement SEMI
+   | write_statement SEMI
++  | forall_statement
+   | SEMI
+ ;
+ 
++forall_when
++  : WHEN exp
++  {
++    // Generate code to load the induction variable into a register
++    t_regID rVar = genLoadVariable(program, vForallIndVar);
++    // Generate the check for the value of the induction variable; if it is
++    // not equal to the argument of `when' jump over this case
++    $1 = createLabel(program);
++    genBNE(program, rVar, $2, $1);
++  }
++  code_block
++  {
++    // Generate a jump to the induction variable increment at the end of
++    // this case's block
++    genJ(program, lForallContinue);
++    // Generate the label for skipping over this case
++    assignLabel(program, $1);
++  }
++;
++
++forall_when_list
++  : forall_when_list forall_when
++  |
++;
++
++forall_body
++  :
++  {
++    // Create a label object that will be later assigned at the end of all cases
++    lForallContinue = createLabel(program);
++    // The semantic actions of `for_switch_list' will generate the
++    // switch-case-like structure of the loop body. If none of the cases pass,
++    // the code flows naturally into the `else' code block.
++  }
++  forall_when_list ELSE code_block
++  {
++    // Place the label for proceeding to the next loop iteration 
++    assignLabel(program, lForallContinue);
++  }
++;
++
++forall_statement
++  : FORALL var_id FROM exp TO exp
++  {
++    // vForallIndVar is always NULL if we are not parsing a `forall' statement,
++    // we can check its value to see if the statement is being nested.
++    if (vForallIndVar) {
++      yyerror("forall statements cannot be nested");
++      YYERROR;
++    }
++    // Set the vForallIndVar global to the pointer to the symbol object for the
++    // induction variable of this loop. This allows to get the symbol object
++    // when in the semantic action for a `when <exp> <block>' case.
++    vForallIndVar = $2;
++    // Generate code for initializing the induction variable.
++    genStoreRegisterToVariable(program, vForallIndVar, $4);
++    // Place a label at the loop condition check for the back-edge
++    lForallNext = createLabel(program);
++    assignLabel(program, lForallNext);
++    // Generate code to check the loop condition and jump out of the loop if it
++    // is false (if induction variable >= upper bound jump to end).
++    t_regID rVar = genLoadVariable(program, vForallIndVar);
++    lForallExit = createLabel(program);
++    genBGE(program, rVar, $6, lForallExit);
++  }
++  forall_body
++  {
++    // Generate code to increment the induction variable
++    t_regID rVar = genLoadVariable(program, vForallIndVar);
++    genADDI(program, rVar, rVar, 1);
++    genStoreRegisterToVariable(program, vForallIndVar, rVar);
++    // Generate the jump back to the loop condition
++    genJ(program, lForallNext);
++    // Place the label for exiting the loop
++    assignLabel(program, lForallExit);
++    // Reset the pointer to the induction variable symbol object, to mark that
++    // we are finished parsing and generating code for the statement.
++    vForallIndVar = NULL;
++  }
++;
++
+ /* An assignment statement stores the value of an expression in the memory
+  * location of a given scalar variable or array element. */
+ assign_statement
+diff --git a/acse/scanner.l b/acse/scanner.l
+index 3d35cd5..6192fa1 100644
+--- a/acse/scanner.l
++++ b/acse/scanner.l
+@@ -81,6 +81,10 @@ ID                        [a-zA-Z_][a-zA-Z0-9_]*
+ "return"                  { return RETURN; }
+ "read"                    { return READ; }
+ "write"                   { return WRITE; }
++"forall"                  { return FORALL; }
++"from"                    { return FROM; }
++"to"                      { return TO; }
++"when"                    { return WHEN; }
+ 
+ {ID}                      {
+                             yylval.string = strdup(yytext);
+diff --git a/tests/forall/forall.src b/tests/forall/forall.src
+new file mode 100644
+index 0000000..7dd748d
+--- /dev/null
++++ b/tests/forall/forall.src
+@@ -0,0 +1,17 @@
++int a, i;
++
++a = 0;
++forall i from 0 to 10 else {
++  a = a + 1;
++}
++write(a);  // prints 10
++forall i from 0 to 10 when 2 {
++  a = a - 1;
++  write(-1);
++} when 7 {
++  a = a - 3;
++  write(-3);
++} else {
++  write(a);
++}
++// prints: 10 10 -1 9 9 9 9 -3 6 6

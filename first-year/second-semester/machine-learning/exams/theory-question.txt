@@ -1,0 +1,19 @@
+Ridge Regression vs LASSO
+Ordinary least squares vs BLS vs Ridge 
+Logistic Regression vs Perceptron
+PCA
+Cross Validation
+Bagging vs Boosting
+Bias Variance tradeoff
+Vc dimension
+Processi Gaussiani
+Kernel valido
+Svm + bias-variance + algoritmi
+Policy evaluation
+Operatori di Bellman
+Value Iteration vs Policy Iteration
+Q-learning vs Sarsa
+MC vs TD
+Eligibility traces
+UCB1
+TS

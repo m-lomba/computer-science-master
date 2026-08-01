@@ -1,0 +1,71 @@
+diff --git a/acse/parser.y b/acse/parser.y
+--- a/acse/parser.y
++++ b/acse/parser.y
+@@ -70,6 +70,7 @@ void yyerror(const char *msg)
+ %token TYPE
+ %token RETURN
+ %token READ WRITE ELSE
++%token QUESTION COLON
+ 
+ // These are the tokens with a semantic value.
+ %token <ifStmt> IF
+@@ -96,6 +97,7 @@ void yyerror(const char *msg)
+  * specific keyword used (%left, %right).
+  */
+ 
++%left QUESTION COLON
+ %left OROR
+ %left ANDAND
+ %left OR_OP
+@@ -435,6 +437,28 @@ exp
+     $$ = getNewRegister(program);
+     genOR(program, $$, rNormalizedOp1, rNormalizedOp2);
+   }
++  | exp QUESTION exp COLON exp
++  {
++    // Reserve a new register for the result of the operation
++    $$ = getNewRegister(program);
++    // Generate a branch to the `false' case if the condition is equal to zero
++    t_label *lElse = createLabel(program);
++    genBEQ(program, $1, REG_0, lElse);
++    // Generate the assignment of the true value to the result.
++    // The instruction generated here is reached if the previous branch was
++    // not taken.
++    genADD(program, $$, $3, REG_0);
++    // Generate an unconditional jump that skips over the code for the `false'
++    // case.
++    t_label *lExit = createLabel(program);
++    genJ(program, lExit);
++    // Generate the label for the `false' case
++    assignLabel(program, lElse);
++    // Generate the assignment of the false value to the result.
++    genADD(program, $$, $5, REG_0);
++    // Generate the label necessary for skipping the `false' case.
++    assignLabel(program, lExit);
++  }
+ ;
+ 
+ var_id
+diff --git a/acse/scanner.l b/acse/scanner.l
+--- a/acse/scanner.l
++++ b/acse/scanner.l
+@@ -72,6 +72,8 @@ ID                        [a-zA-Z_][a-zA-Z0-9_]*
+ "&&"                      { return ANDAND; }
+ "||"                      { return OROR; }
+ ","                       { return COMMA; }
++"?"                       { return QUESTION; }
++":"                       { return COLON; }
+ 
+ "do"                      { return DO; }
+ "else"                    { return ELSE; }
+diff --git a/tests/ternary/ternary.src b/tests/ternary/ternary.src
+new file mode 100644
+--- /dev/null
++++ b/tests/ternary/ternary.src
+@@ -0,0 +1,6 @@
++int a;
++a = 10;
++a = (a > 5 ? 5 : 15) + 3;
++write(a == 8 ? 1 : 0); // prints 1
++read(a);
++write(a > 0 ? 1 : 0);

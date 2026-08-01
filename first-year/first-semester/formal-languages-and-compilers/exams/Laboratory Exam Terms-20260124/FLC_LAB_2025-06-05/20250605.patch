@@ -1,0 +1,136 @@
+diff --git a/acse/parser.h b/acse/parser.h
+index 100112f..f9706bd 100644
+--- a/acse/parser.h
++++ b/acse/parser.h
+@@ -26,6 +26,13 @@ typedef struct {
+   t_label *lExit; ///< Label to the first instruction after the loop.
+ } t_whileStmt;
+ 
++typedef struct {
++  t_label *lLoop;
++  t_label *lExit;
++  t_regID rIdx;
++  t_regID rRes;
++} t_allExpr;
++
+ /**
+  * @}
+  */
+diff --git a/acse/parser.y b/acse/parser.y
+index 4039075..3bab379 100644
+--- a/acse/parser.y
++++ b/acse/parser.y
+@@ -50,6 +50,7 @@ void yyerror(const char *msg)
+   t_label *label;
+   t_ifStmt ifStmt;
+   t_whileStmt whileStmt;
++  t_allExpr allExpr;
+ }
+ 
+ /*
+@@ -77,6 +78,7 @@ void yyerror(const char *msg)
+ %token <label> DO
+ %token <string> IDENTIFIER
+ %token <integer> NUMBER
++%token <allExpr> ALL
+ 
+ /*
+  * Non-terminal symbol semantic value type declarations
+@@ -435,6 +437,59 @@ exp
+     $$ = getNewRegister(program);
+     genOR(program, $$, rNormalizedOp1, rNormalizedOp2);
+   }
++  | ALL LPAR var_id COMMA var_id COMMA 
++  {
++    // The first argument must be an array, the second must be a scalar.
++    if (!isArray($3) || isArray($5)) {
++      yyerror("type mismatch");
++      YYERROR;
++    }
++    
++    // Reserve a register for the result and generate an LI instruction to
++    // initialize it to 1 (true).
++    $1.rRes = getNewRegister(program);
++    genLI(program, $1.rRes, 1);
++    // Reserve a register for the array index we are accessing and loop counter
++    // and generate an LI to initialize it to zero.
++    $1.rIdx = getNewRegister(program);
++    genLI(program, $1.rIdx, 0);
++    // Generate a label for the back-edge of the loop.
++    $1.lLoop = createLabel(program);
++    assignLabel(program, $1.lLoop);
++    // Generate code to check if the array index reached the end of the array
++    // and break out of the loop (without setting the result to zero)
++    // in that case.
++    t_regID rMax = getNewRegister(program);
++    genLI(program, rMax, $3->arraySize);
++    $1.lExit = createLabel(program);
++    genBGE(program, $1.rIdx, rMax, $1.lExit);
++    // Generate code that loads the array element at the current index and
++    // stores it to the variable.
++    t_regID rElem = genLoadArrayElement(program, $3, $1.rIdx);
++    genStoreRegisterToVariable(program, $5, rElem);
++    // (the code generated up to here appears before the code that evaluates
++    // the expression)
++  }
++  exp RPAR
++  {
++    // (the code generated from here appears after the code that evaluates the
++    // expression)
++    // Generate the increment of the array index / loop counter.
++    genADDI(program, $1.rIdx, $1.rIdx, 1);
++    // Generate code that checks the expression's last value, and if it was
++    // not equal to zero (true) continue with the next loop iteration.
++    genBNE(program, $8, REG_0, $1.lLoop);
++    // If the expression's last value was false, and the result of the operator
++    // is zero (false), the branch generated above is not taken. Generate an
++    // instruction (that appears after the branch) that sets the result to
++    // zero. We are now out of the loop effectively.
++    genLI(program, $1.rRes, 0);
++    // Generate the label for exiting the loop without setting the result to
++    // zero.
++    assignLabel(program, $1.lExit);
++    // Set the result register of the expression.
++    $$ = $1.rRes;
++  }
+ ;
+ 
+ var_id
+diff --git a/acse/scanner.l b/acse/scanner.l
+index 3d35cd5..57507ee 100644
+--- a/acse/scanner.l
++++ b/acse/scanner.l
+@@ -81,6 +81,7 @@ ID                        [a-zA-Z_][a-zA-Z0-9_]*
+ "return"                  { return RETURN; }
+ "read"                    { return READ; }
+ "write"                   { return WRITE; }
++"all"                     { return ALL; }
+ 
+ {ID}                      {
+                             yylval.string = strdup(yytext);
+diff --git a/tests/all/all.src b/tests/all/all.src
+new file mode 100644
+index 0000000..29b03f2
+--- /dev/null
++++ b/tests/all/all.src
+@@ -0,0 +1,20 @@
++int a[10], b[10], v, e, i;
++
++// Fill `a' with the numbers from 1 to 10 and `b` with 20s
++i = 0;
++while (i < 10) {
++  a[i] = i+1;
++  b[i] = 20;
++  i = i + 1;
++}
++
++// Prints 1 because all elements of `a' are greater than 0
++write(all(a, e, e>0));
++// Prints 0 because a[4] to a[9] are not less than 5
++write(all(a, e, e<5));
++// Prints 3 because all() evaluates to 0 and the value of the
++// expression is therefore 3
++write(3+all(a, e, e>5)/2);
++// Prints 0 because we are using the values from a to read from
++// b, and all values in b are greater than 15
++write(all(a, e, b[e-1]<15));

@@ -1,0 +1,91 @@
+diff --git a/acse/parser.y b/acse/parser.y
+--- a/acse/parser.y
++++ b/acse/parser.y
+@@ -24,6 +24,9 @@ void yyerror(const char *msg)
+   emitError(curFileLoc, "%s", msg);
+ }
+ 
++// The array which is being assigned to by the current array assign statement
++t_symbol *curArray;
++
+ %}
+ 
+ /*
+@@ -88,6 +91,7 @@ void yyerror(const char *msg)
+ 
+ %type <var> var_id
+ %type <reg> exp
++%type <integer> array_assign_list
+ 
+ /*
+  * Operator precedence and associativity
+@@ -196,6 +200,52 @@ assign_statement
+   {
+     genStoreRegisterToArrayElement(program, $1, $3, $6);
+   }
++  | var_id ASSIGN LBRACE 
++  {
++    // Check that the destination of the assignment is in fact an array
++    if (!isArray($1)) {
++      yyerror("array assignment to variables is illegal");
++      YYERROR;
++    }
++    // Copy the symbol object of the array to a global so that it can be
++    // accessed by the semantic actions in array_assign_items.
++    curArray = $1;
++  }
++  array_assign_list RBRACE
++;
++
++array_assign_list
++  : array_assign_list COMMA exp
++  {
++    // We use the semantic value of array_assign_items to store the number of
++    // elements in the assignment list found so far.
++    //   Only generate code if the element we will assign next is within bounds.
++    if ($1 < curArray->arraySize) {
++      // The element is within bounds, generate code to load the index into a
++      // register as required by genStoreRegisterToArrayElement
++      t_regID rIdx = getNewRegister(program);
++      genLI(program, rIdx, $1);
++      // Generate the store to the array element
++      genStoreRegisterToArrayElement(program, curArray, rIdx, $3);
++    } else if ($1 == curArray->arraySize) {
++      // The list of expressions is too large, print a warning but only for
++      // the first out of bounds element.
++      printf("warning: too many elements in array assignment, extras ignored\n");
++    }
++    // There is one more one element than before
++    $$ = $1 + 1;
++  }
++  | exp
++  {
++    // The action for the base case of the recursion is the same as the
++    // recursive case, but we are always assigning to the first element (which
++    // is always in range because zero-length arrays are illegal in LANCE).
++    t_regID rIdx = getNewRegister(program);
++    genLI(program, rIdx, 0);
++    genStoreRegisterToArrayElement(program, curArray, rIdx, $1);
++    // There is only one element so far
++    $$ = 1;
++  }
+ ;
+ 
+ /* An if statements first computes the expression, then jumps to the `else' part
+diff --git a/tests/array_assign/array_assign.src b/tests/array_assign/array_assign.src
+--- /dev/null
++++ b/tests/array_assign/array_assign.src
+@@ -0,0 +1,13 @@
++int a, i;
++int b[3];
++
++read(a);
++b[2] = 2;
++b = {0, 1};
++b = {b[1]+a, b[2]+a*2, b[0]+a*3, b[0]};
++
++i = 0;
++while (i < 3) {
++  write(b[i]);
++  i = i + 1;
++}

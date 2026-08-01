@@ -1,6 +1,6 @@
 # Computer Science Master's Degree
 
-Backup repository for all coursework, materials, and projects completed during my Master's Degree in Computer Science at Politecnico di Milano.
+Backup repository for all coursework and materials related to my Master's Degree in Computer Science at Politecnico di Milano.
 
 ## Repository Structure
 

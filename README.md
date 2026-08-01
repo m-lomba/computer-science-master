@@ -1,4 +1,4 @@
-# Computer Science Master's Degree – Politecnico di Milano
+# Computer Science Master's Degree
 
 Backup repository for all coursework, materials, and projects completed during my Master's Degree in Computer Science at Politecnico di Milano.
 
